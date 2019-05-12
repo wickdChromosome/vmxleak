@@ -1,0 +1,64 @@
+diff --git a/x86/Makefile.x86_64 b/x86/Makefile.x86_64
+index 51f9b80..4580f63 100644
+--- a/x86/Makefile.x86_64
++++ b/x86/Makefile.x86_64
+@@ -19,6 +19,7 @@ tests += $(TEST_DIR)/vmx.flat
+ tests += $(TEST_DIR)/tscdeadline_latency.flat
+ tests += $(TEST_DIR)/intel-iommu.flat
+ tests += $(TEST_DIR)/vmware_backdoors.flat
++tests += $(TEST_DIR)/vmxleak.flat
+ 
+ include $(SRCDIR)/$(TEST_DIR)/Makefile.common
+ 
+diff --git a/x86/vmxleak.c b/x86/vmxleak.c
+new file mode 100644
+index 0000000..b5dd1f1
+--- /dev/null
++++ b/x86/vmxleak.c
+@@ -0,0 +1,46 @@
++#include "processor.h"
++#include "libcflat.h"
++#include "apic.h"
++#include "desc.h"
++#include "ioram.h"
++#include "msr.h"
++#include "smp.h"
++#include "types.h"
++#include "vm.h"
++#include "vmalloc.h"
++#include "vmx.h"
++#include "alloc_page.h"
++
++u64 *vmxon_region;
++
++int main(void) {
++  setup_vm();
++  setup_idt();
++
++  ulong fix_cr0_set, fix_cr0_clr;
++  ulong fix_cr4_set, fix_cr4_clr;
++
++  fix_cr0_set = rdmsr(MSR_IA32_VMX_CR0_FIXED0);
++  fix_cr0_clr = rdmsr(MSR_IA32_VMX_CR0_FIXED1);
++  fix_cr4_set = rdmsr(MSR_IA32_VMX_CR4_FIXED0);
++  fix_cr4_clr = rdmsr(MSR_IA32_VMX_CR4_FIXED1);
++
++  write_cr0((read_cr0() & fix_cr0_clr) | fix_cr0_set);
++  write_cr4((read_cr4() & fix_cr4_clr) | fix_cr4_set | X86_CR4_VMXE);
++
++  void *mem = alloc_vpages(1);
++  install_page((void *)read_cr3(), IORAM_BASE_PHYS, mem);
++  bool ret;
++  u64 rflags = read_rflags() | X86_EFLAGS_CF | X86_EFLAGS_ZF;
++
++
++  asm volatile("push %1; popf; vmxon %2; setbe %0\n\t"
++               : "=q"(ret)
++               : "q"(rflags), "m"(*(char *)mem)
++               : "cc");
++
++  vmx_on();
++  vmx_off();
++
++  return 0;
++}
